@@ -154,7 +154,7 @@ import github.com/tjfoc/gmsm/sm2
 ### 方法列表
 
 #### GenerateKey
-生成随机秘钥。
+生成随机密钥。
 ```Go
 func GenerateKey() (*PrivateKey, error) 
 ```

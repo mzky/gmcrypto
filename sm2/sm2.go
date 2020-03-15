@@ -77,7 +77,7 @@ func SignDataToSignDigit(sign []byte) (*big.Int, *big.Int, error) {
 // sign format = 30 + len(z) + 02 + len(r) + r + 02 + len(s) + s, z being what follows its size, ie 02+len(r)+r+02+len(s)+s
 func (priv *PrivateKey) Sign(rand io.Reader, msg []byte, opts crypto.SignerOpts) ([]byte, error) {
 	// r, s, err := Sign(priv, msg)
-	r, s, err := Sm2Sign(priv, msg, nil)
+	r, s, err := Sm2Sign(priv, msg, []byte("1234567812345678"))
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +95,7 @@ func (pub *PublicKey) Verify(msg []byte, sign []byte) bool {
 	if err != nil {
 		return false
 	}
-	return Sm2Verify(pub, msg, nil, sm2Sign.R, sm2Sign.S)
+	return Sm2Verify(pub, msg, []byte("1234567812345678"), sm2Sign.R, sm2Sign.S)
 	// return Verify(pub, msg, sm2Sign.R, sm2Sign.S)
 }
 
@@ -352,9 +352,6 @@ func msgHash(za, msg []byte) (*big.Int, error) {
 
 // ZA = H256(ENTLA || IDA || a || b || xG || yG || xA || yA)
 func ZA(pub *PublicKey, uid []byte) ([]byte, error) {
-	if len(uid) <= 0 {
-		uid = default_uid
-	}
 	za := sm3.New()
 	uidLen := len(uid)
 	if uidLen >= 8192 {
@@ -363,7 +360,9 @@ func ZA(pub *PublicKey, uid []byte) ([]byte, error) {
 	Entla := uint16(8 * uidLen)
 	za.Write([]byte{byte((Entla >> 8) & 0xFF)})
 	za.Write([]byte{byte(Entla & 0xFF)})
-	za.Write(uid)
+	if uidLen > 0 {
+		za.Write(uid)
+	}
 	za.Write(sm2P256ToBig(&sm2P256.a).Bytes())
 	za.Write(sm2P256.B.Bytes())
 	za.Write(sm2P256.Gx.Bytes())

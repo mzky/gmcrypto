@@ -1033,7 +1033,8 @@ func checkSignature(algo SignatureAlgorithm, signed, signature []byte, publicKey
 				X:     pub.X,
 				Y:     pub.Y,
 			}
-			if !Sm2Verify(sm2pub, signed, nil, ecdsaSig.R, ecdsaSig.S) {
+			uid := []byte("1234567812345678")
+			if !Sm2Verify(sm2pub, signed, uid, ecdsaSig.R, ecdsaSig.S) {
 				return errors.New("x509: SM2 verification failure")
 			}
 		default:
@@ -1313,6 +1314,12 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 			case 19:
 				// RFC 5280, 4.2.1.9
 				var constraints basicConstraints
+				if len(e.Value) >= 4 {
+					if e.Value[4] != 0x00 {
+						e.Value[4] = 0xFF
+					}
+				}
+
 				if rest, err := asn1.Unmarshal(e.Value, &constraints); err != nil {
 					return nil, err
 				} else if len(rest) != 0 {
@@ -1458,16 +1465,18 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 
 			case 32:
 				// RFC 5280 4.2.1.4: Certificate Policies
-				var policies []policyInformation
-				if rest, err := asn1.Unmarshal(e.Value, &policies); err != nil {
-					return nil, err
-				} else if len(rest) != 0 {
-					return nil, errors.New("x509: trailing data after X.509 certificate policies")
-				}
-				out.PolicyIdentifiers = make([]asn1.ObjectIdentifier, len(policies))
-				for i, policy := range policies {
-					out.PolicyIdentifiers[i] = policy.Policy
-				}
+				/*
+					// for zero identify asn1 parse error
+					var policies []policyInformation
+					if rest, err := myAsn1.Unmarshal(e.Value, &policies); err != nil {
+						return nil, err
+					} else if len(rest) != 0 {
+						return nil, errors.New("x509: trailing data after X.509 certificate policies")
+					}
+					out.PolicyIdentifiers = make([]asn1.ObjectIdentifier, len(policies))
+					for i, policy := range policies {
+						out.PolicyIdentifiers[i] = policy.Policy
+					}*/
 
 			default:
 				// Unknown extensions are recorded if critical.
@@ -2394,7 +2403,7 @@ func ParseCertificateRequest(asn1Data []byte) (*CertificateRequest, error) {
 
 func parseCertificateRequest(in *certificateRequest) (*CertificateRequest, error) {
 	out := &CertificateRequest{
-		Raw: in.Raw,
+		Raw:                      in.Raw,
 		RawTBSCertificateRequest: in.TBSCSR.Raw,
 		RawSubjectPublicKeyInfo:  in.TBSCSR.PublicKey.Raw,
 		RawSubject:               in.TBSCSR.Subject.FullBytes,
@@ -2542,3 +2551,133 @@ func CreateCertificateToPem(FileName string, template, parent *Certificate, pubK
 	}
 	return true, nil
 }
+
+func CheckRootCertSignature(rootCert []*Certificate, userCert *Certificate) error {
+	if (rootCert == nil) || (userCert == nil) {
+		return errors.New("CheckRootCertSignature rootCerts or userCert must not nil")
+	}
+
+	for _, value := range rootCert {
+		if value == nil {
+			return errors.New("CheckRootCertSignature rootCert value must not nil")
+		}
+		err := value.CheckSignature(userCert.SignatureAlgorithm, userCert.RawTBSCertificate, userCert.Signature)
+		if err == nil {
+			return nil
+		}
+	}
+
+	return errors.New("CheckRootCertSignature check signature fail")
+}
+
+func CheckRootCertSignatureBase64(rootCert []string, userCert string) error {
+	certBegin := "-----BEGIN CERTIFICATE-----\r\n"
+	certEnd := "\r\n-----END CERTIFICATE-----"
+
+	//var rootCertArr []*Certificate = make([]*Certificate, 0)
+
+	if (len(rootCert) <= 0) || (userCert == "") {
+		return errors.New("CheckRootCertSignatureBase64 rootCerts or userCert must not nil")
+	}
+
+	certInfo, err := ReadCertificateFromMem([]byte(certBegin + userCert + certEnd))
+	if err != nil {
+		return fmt.Errorf("CheckRootCertSignatureBase64 failed to read root cert pem err:%v", err)
+	}
+
+	for _, value := range rootCert {
+		if value == "" {
+			return errors.New("CheckRootCertSignatureBase64 rootCert value must not nil")
+		}
+		rootCertInfo, err := ReadCertificateFromMem([]byte(certBegin + value + certEnd))
+		if err == nil {
+			err = rootCertInfo.CheckSignature(certInfo.SignatureAlgorithm, certInfo.RawTBSCertificate, certInfo.Signature)
+			if err == nil {
+				return nil
+			}
+		}
+		//rootCertArr = append(rootCertArr, rootCertInfo)
+	}
+	//err = CheckRootCertSignature(rootCertArr, certInfo)
+	//if err != nil {
+	//	return fmt.Errorf("CheckRootCertSignatureBase64 failed err:%v", err)
+	//}
+
+	return fmt.Errorf("Not find RootCert for UserCert")
+}
+
+/*
+//--1
+	certPem := "MIIC9jCCApygAwIBAgIKGhAAAAAAAAXnlTAKBggqgRzPVQGDdTBEMQswCQYDVQQGEwJDTjENMAsGA1UECgwEQkpDQTENMAsGA1UECwwEQkpDQTEXMBUGA1UEAwwOQmVpamluZyBTTTIgQ0EwHhcNMTgxMTA3MTYwMDAwWhcNMTkwNTA4MTU1OTU5WjAnMQswCQYDVQQGDAJDTjEYMBYGA1UEAwwPdGVzdHl5eSjmtYvor5UpMFkwEwYHKoZIzj0CAQYIKoEcz1UBgi0DQgAEt9GpfeLviiGBnIxjTPJHxuewTUgWtlxYblbVlgkJT01umN2EjQ93E+HOYCp+AJRZpS0KMS2KnmBbPmlWGz/M06OCAZEwggGNMB8GA1UdIwQYMBaAFB/mz9SPxSIql0opihXnFsmSNMS2MB0GA1UdDgQWBBRtXSGLGQrL+vCfsDuoNKPe9KJnMzALBgNVHQ8EBAMCBsAwgZ0GA1UdHwSBlTCBkjBgoF6gXKRaMFgxCzAJBgNVBAYTAkNOMQ0wCwYDVQQKDARCSkNBMQ0wCwYDVQQLDARCSkNBMRcwFQYDVQQDDA5CZWlqaW5nIFNNMiBDQTESMBAGA1UEAxMJY2EyMWNybDI3MC6gLKAqhihodHRwOi8vY3JsLmJqY2Eub3JnLmNuL2NybC9jYTIxY3JsMjcuY3JsMBgGCiqBHIbvMgIBAQEECgwIU0YxMjMxMnEwFAYIYIZIAYb4RAIECAwGMTIzMTJxMB8GCiqBHIbvMgIBAQ4EEQwPMTAyMDAwMTAwMTg5MjIxMCEGCiqBHIbvMgIBARcEEwwRMUAyMTUwMDlTRjAxMjMxMnEwFAYIKoEc0BQEAQEECAwGMTIzMTJxMBQGCiqBHIbvMgIBAR4EBgwEMTA1MDAKBggqgRzPVQGDdQNIADBFAiBuVZDxxM7qkJAR1EptG4btUsZz3MD0Zklp9MOCV5C5FwIhAM5SIIoCod89Pgc7TI9kz7SS+8CZMMr4iwJL2Wjz1gx5"
+	rootCertPem := "MIIB4zCCAYqgAwIBAgIKEaAAAAAAAAAAADAKBggqgRzPVQGDdTBYMQswCQYDVQQGDAJDTjENMAsGA1UECgwEQkpDQTEcMBoGA1UECwwTQmVpSmluZyBTTTIgUk9PVCBDQTEcMBoGA1UEAwwTQmVpSmluZyBTTTIgUk9PVCBDQTAeFw0xMTA4MTYxNjAwMDBaFw00MTA4MTcxNTU5NTlaMFgxCzAJBgNVBAYMAkNOMQ0wCwYDVQQKDARCSkNBMRwwGgYDVQQLDBNCZWlKaW5nIFNNMiBST09UIENBMRwwGgYDVQQDDBNCZWlKaW5nIFNNMiBST09UIENBMFkwEwYHKoZIzj0CAQYIKoEcz1UBgi0DQgAEuST9VTwZbF5gD82zvw/8sMNbuWLK28oi+/GuG6FAK705uqq0O8bGDso/YNH1/SCrlCvqaLdesbXu4SChuYiMyqM8MDowDAYDVR0TBAUwAwEBATALBgNVHQ8EBAMCAQYwHQYDVR0OBBYEFPXDVTFUTcyP5h26k0WDUFtv4v+SMAoGCCqBHM9VAYN1A0cAMEQCIEnM2RYEpN6GHpa7Uu52zjI2OBW3lUVfmAzklNYc2aavAiByX91fqVaVdsa+zFWLPqTncTwsgUrLVRzSb+VyGI/bCw=="
+	subCertPem := "MIICjDCCAjOgAwIBAgIKEaAAAAAAAAAACjAKBggqgRzPVQGDdTBYMQswCQYDVQQGDAJDTjENMAsGA1UECgwEQkpDQTEcMBoGA1UECwwTQmVpSmluZyBTTTIgUk9PVCBDQTEcMBoGA1UEAwwTQmVpSmluZyBTTTIgUk9PVCBDQTAeFw0xMTA4MTYxNjAwMDBaFw0zMTA4MTcxNTU5NTlaMEQxCzAJBgNVBAYMAkNOMQ0wCwYDVQQKDARCSkNBMQ0wCwYDVQQLDARCSkNBMRcwFQYDVQQDDA5CZWlqaW5nIFNNMiBDQTBZMBMGByqGSM49AgEGCCqBHM9VAYItA0IABIqKqkcNKpoz2FBfukloFiNScwxzxjtIk40muZtDLkf0AfN8iwZJ3HGd09asHYL9u3t6qijHQN1N4qWZM+qsVZOjgfgwgfUwDAYDVR0TBAUwAwEBATALBgNVHQ8EBAMCAQYwHQYDVR0OBBYEFB/mz9SPxSIql0opihXnFsmSNMS2MB8GA1UdIwQYMBaAFPXDVTFUTcyP5h26k0WDUFtv4v+SMFwGA1UdIARVMFMwUQYJKoEchu8yAQQBMEQwQgYIKwYBBQUHAgEWNmh0dHA6Ly93d3cuYmpjYS5vcmcuY24vc2l0ZXMvZGVmYXVsdC9maWxlcy9zbTItY3BzLnBkZjA6BgNVHR8EMzAxMC+gLaArhilodHRwOi8vbGRhcC5iamNhLm9yZy5jbi9hcmwvYmpyb290c20yLmNybDAKBggqgRzPVQGDdQNHADBEAiAKJewd2zp7sbhMGmMFRk1cHzR4YudN2+nJYJG4HaqNdQIgfI1RENvh2Q+Lt4Bj50FmqdEPQzm1PZEsd/WTyT22Rzo="
+
+	var certArrBase64 []string = make([]string, 0)
+	certArrBase64 = append(certArrBase64, rootCertPem)
+	certArrBase64 = append(certArrBase64, subCertPem)
+
+	err := sm2.CheckRootCertSignatureBase64(certArrBase64, certPem)
+	if err != nil {
+		fmt.Printf("check cert chain err:%v", err)
+	}
+//---2
+	cert, err := sm2.ReadCertificateFromPem("/Users/zzj/go/src/gmsm/certFiles/userCert.cer" )
+	if err != nil {
+		fmt.Printf("failed to read cert file")
+	}
+
+
+	rootCert, err := sm2.ReadCertificateFromPem("/Users/zzj/go/src/gmsm/certFiles/rootCert.cer" )
+	if err != nil {
+		fmt.Printf("failed to read cert file")
+	}
+
+	subCert, err := sm2.ReadCertificateFromPem("/Users/zzj/go/src/gmsm/certFiles/subCert.cer" )
+	if err != nil {
+		fmt.Printf("failed to read cert file")
+	}
+
+	fmt.Println("%v, %v, %v",rootCert, subCert,cert)
+
+	var certArr []*sm2.Certificate = make([]*sm2.Certificate, 0)
+	certArr = append(certArr, rootCert)
+	certArr = append(certArr, subCert)
+
+	err = sm2.CheckRootCertSignature(certArr, cert)
+	if err != nil {
+		fmt.Println("check error")
+	}else{
+		fmt.Println("check success")
+	}
+
+	err = subCert.CheckSignature(cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature)
+	if err != nil {
+		fmt.Printf("CheckSignature error\n")
+	} else {
+		fmt.Printf("CheckSignature ok\n")
+	}
+//--3
+	certPool := sm2.NewCertPool()
+
+	data, err := ioutil.ReadFile("/Users/zzj/go/src/gmsm/certFiles/rootCert.cer")
+	if err == nil {
+		certPool.AppendCertsFromPEM(data)
+	}
+
+	data, err = ioutil.ReadFile("/Users/zzj/go/src/gmsm/certFiles/subCert.cer")
+	if err == nil {
+		certPool.AppendCertsFromPEM(data)
+	}
+
+
+	parents, errCert, err := certPool.FindVerifiedParents(cert)
+	if err != nil {
+		fmt.Printf("parents:%v, errCert=%v",parents, errCert)
+	}else{
+		if len(parents) > 0 {
+			fmt.Println("success")
+		}else {
+			fmt.Println("fail")
+		}
+	}
+*/

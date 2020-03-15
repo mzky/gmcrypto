@@ -152,6 +152,30 @@ func (s *CertPool) findVerifiedParents(cert *Certificate) (parents []int, errCer
 	return
 }
 
+func (s *CertPool) FindVerifiedParents(cert *Certificate) (parents []int, errCert *Certificate, err error) {
+	if s == nil {
+		return
+	}
+	var candidates []int
+
+	if len(cert.AuthorityKeyId) > 0 {
+		candidates = s.bySubjectKeyId[string(cert.AuthorityKeyId)]
+	}
+	if len(candidates) == 0 {
+		candidates = s.byName[string(cert.RawIssuer)]
+	}
+
+	for _, c := range candidates {
+		if err = cert.CheckSignatureFrom(s.certs[c]); err == nil {
+			parents = append(parents, c)
+		} else {
+			errCert = s.certs[c]
+		}
+	}
+
+	return
+}
+
 func (s *CertPool) contains(cert *Certificate) bool {
 	if s == nil {
 		return false
